@@ -31,25 +31,30 @@ def get_course_record_pagination():
     learner_record_count = count_learner_records()
     learner_record_pages = learner_record_count // course_record_page_size
     logger.info(
-        f"There are {learner_record_count} learner records. {learner_record_pages if learner_record_pages > 0 else 'All'} full pages have been processed")
+        f"There are {learner_record_count} learner records. {learner_record_pages} full pages have been processed")
     return CourseRecordPagination(course_record_page_size, course_record_count, max_page_count, learner_record_count,
                                   learner_record_pages)
 
 
-def fetch_course_records(pagination: CourseRecordPagination):
-    course_records = []
+def insert_course_records(pagination: CourseRecordPagination, execute=False):
     if pagination.has_remaining_records():
         logger.info(
             f"There are {pagination.get_remaining_records()} records left to process, which is {pagination.get_remaining_pages()} pages")
         for page in range(pagination.total_processed_pages, pagination.total_course_record_pages):
             page = page + 1
             logger.info(f"Fetching course records for page {page}")
-            course_records.extend(get_course_records(page))
-            logger.info(f"Transforming {len(course_records)} course records")
-            pagination.processed_count += len(course_records)
+            result = get_course_records(page)
+            logger.info(f"Transforming {len(result)} course records")
+            pagination.processed_count += len(result)
+            learner_records = transform_course_records_into_learner_records(result)
+            logger.info(f"{len(learner_records)} learner records ready to be inserted")
+            if execute:
+                logger.info(f"Inserting {len(learner_records)} learner records")
+                insert_learner_records(learner_records)
+            else:
+                logger.info("execute flag not passed. Not inserting")
     else:
         logger.info("No records left to process")
-    return course_records
 
 
 def fetch_all_lr_map():
@@ -127,14 +132,7 @@ def run(data: List[str], execute: bool):
     if "learner_records" in data:
         logger.info("learner_records flag found")
         course_record_pagination = get_course_record_pagination()
-        course_records = fetch_course_records(course_record_pagination)
-        learner_records = transform_course_records_into_learner_records(course_records)
-        logger.info(f"{len(learner_records)} learner records ready to be inserted")
-        if execute:
-            logger.info(f"Inserting {len(learner_records)} learner records")
-            insert_learner_records(learner_records)
-        else:
-            logger.info("execute flag not passed. Not inserting")
+        insert_course_records(course_record_pagination, execute)
 
     if "events" in data:
         logger.info("events flag found")

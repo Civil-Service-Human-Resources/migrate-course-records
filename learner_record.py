@@ -63,7 +63,8 @@ class CombinedRecord(CourseRecordBase):
 
 
 def insert_learner_records(learner_records: List[LearnerRecord]):
-    logger.info(f"Inserting {len(learner_records)} total records")
+    batch_size = 1000
+    logger.info(f"Inserting {len(learner_records)} total records in batches of {batch_size}")
     connection = get_mysql_connection()
     for _i in range(0, len(learner_records), 1000):
         batch = learner_records[_i:_i + 1000]
@@ -106,10 +107,11 @@ def delete_learner_record_events():
 
 
 def insert_learner_record_events(learner_record_events: List[LearnerRecordEvent]):
-    logger.info(f"Inserting {len(learner_record_events)} total events")
+    batch_size = 1000
+    logger.info(f"Inserting {len(learner_record_events)} total events in batches of {batch_size}")
     connection = get_mysql_connection()
-    for _i in range(0, len(learner_record_events), 1000):
-        batch = learner_record_events[_i:_i + 1000]
+    for _i in range(0, len(learner_record_events), batch_size):
+        batch = learner_record_events[_i:_i + batch_size]
         logger.info(f"Inserting {len(batch)} events")
         values = []
         for row in batch:
