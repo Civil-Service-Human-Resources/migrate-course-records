@@ -10,7 +10,6 @@ dotenv.load_dotenv()
 
 event_source_id = os.environ['EVENT_SOURCE_ID']
 course_record_page_size = os.getenv('COURSE_RECORD_PAGE_SIZE', 200000)
-course_completions_page_size = os.getenv('COURSE_COMPLETIONS_PAGE_SIZE', 250000)
 
 
 # DB
