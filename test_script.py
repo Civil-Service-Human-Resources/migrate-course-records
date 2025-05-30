@@ -34,9 +34,9 @@ def test_find_events():
 def test_find_non_completion_events():
     records = copy(learner_records)
     course_records = [
-        CourseRecord("course_1", "user_1", "ARCHIVED", None, created, created),
-        CourseRecord("course_2", "user_1", None, "LIKED", created, created),
-        CourseRecord("course1", "user_1", "IN_PROGRESS", None, created, created),
+        CourseRecord("course_1", "user_1", "ARCHIVED", None, created),
+        CourseRecord("course_2", "user_1", None, "LIKED", created),
+        CourseRecord("course1", "user_1", "IN_PROGRESS", None, created),
     ]
 
     result = find_non_completion_events(records, course_records)

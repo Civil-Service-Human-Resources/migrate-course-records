@@ -36,22 +36,17 @@ class LearnerRecordWithEvents(LearnerRecord):
 
 
 class BasicCourseRecord(CourseRecordBase):
-    def __init__(self, course_id, user_id, created_at: Optional[datetime], last_updated: datetime):
+    def __init__(self, course_id, user_id, created_at: datetime):
         super().__init__(course_id, user_id)
         self.created_at = created_at
-        self.last_updated = last_updated
-
-    def get_created_timestamp(self):
-        return self.created_at if self.created_at is not None else self.last_updated
 
 
 class CourseRecord(BasicCourseRecord):
-    def __init__(self, course_id, user_id, state: Optional[str], preference: Optional[str],
-                 created_at: Optional[datetime],
-                 last_updated: datetime):
-        super().__init__(course_id, user_id, created_at, last_updated)
+    def __init__(self, course_id, user_id, state: Optional[str], preference: Optional[str], last_updated: datetime):
+        super().__init__(course_id, user_id, last_updated)
         self.state = state
         self.preference = preference
+        self.last_updated = last_updated
 
 
 class CombinedRecord(CourseRecordBase):
@@ -181,7 +176,11 @@ def get_course_records(page):
     conn = get_mysql_connection()
     with conn.cursor() as cursor:
         sql = f"""
-            SELECT cr.course_id, cr.user_id, MIN(mr.created_at) AS 'created_at', cr.last_updated
+            SELECT cr.course_id, cr.user_id,
+            case 
+                when MIN(mr.created_at) is null then cr.last_updated
+                else LEAST(MIN(mr.created_at), cr.last_updated)
+            end as 'created_at'
             from learner_record.course_record cr
             LEFT OUTER JOIN learner_record.module_record mr ON mr.course_id = cr.course_id AND mr.user_id = cr.user_id
             GROUP BY cr.course_id, cr.user_id
@@ -189,7 +188,7 @@ def get_course_records(page):
             LIMIT {course_record_page_size} OFFSET {offset};
         """
         cursor.execute(sql)
-        return [BasicCourseRecord(row[0], row[1], row[2], row[3]) for row in cursor.fetchall()]
+        return [BasicCourseRecord(row[0], row[1], row[2]) for row in cursor.fetchall()]
 
 
 def get_incomplete_course_records_with_records(records_to_query: List[CourseRecordBase]):
@@ -220,4 +219,4 @@ def get_incomplete_course_records_with_ids(user_ids: Set[str], course_ids: Set[s
         """
         logger.info(sql)
         cursor.execute(sql)
-        return [CourseRecord(row[0], row[1], row[2], row[3], None, row[4]) for row in cursor.fetchall()]
+        return [CourseRecord(row[0], row[1], row[2], row[3], row[4]) for row in cursor.fetchall()]

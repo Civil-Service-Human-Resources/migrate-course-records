@@ -16,7 +16,7 @@ logger = get_logger('script')
 
 
 def transform_course_records_into_learner_records(course_records: List[CourseRecord]):
-    return [LearnerRecord(record.course_id, record.user_id, 0, record.get_created_timestamp()) for record in
+    return [LearnerRecord(record.course_id, record.user_id, 0, record.created_at) for record in
             course_records]
 
 
