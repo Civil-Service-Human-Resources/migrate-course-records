@@ -1,16 +1,14 @@
 import argparse
-import math
+from pprint import pprint
 from typing import List, Dict
 
-from config import course_record_page_size
 from course_completions import get_course_completions, CourseCompletion
-from learner_record import get_course_records, count_course_records, count_learner_records, CourseRecord, LearnerRecord, \
+from learner_record import get_course_records, CourseRecord, LearnerRecord, \
     LearnerRecordWithEvents, get_all_learner_records, LearnerRecordEvent, COMPLETE_COURSE, \
     get_incomplete_course_records_with_records, REMOVE_FROM_LEARNING_PLAN, MOVE_TO_LEARNING_PLAN, \
     REMOVE_FROM_SUGGESTIONS, insert_learner_record_events, insert_learner_records, delete_learner_records, \
-    delete_learner_record_events
+    delete_learner_record_events, get_user_course_record_counts, get_user_learner_record_counts
 from log import get_logger
-from models import CourseRecordPagination
 
 logger = get_logger('script')
 
@@ -20,41 +18,31 @@ def transform_course_records_into_learner_records(course_records: List[CourseRec
             course_records]
 
 
-def get_course_record_pagination():
-    logger.info("Counting course records")
-    course_record_count = count_course_records()
-    max_page_count = math.ceil(course_record_count / course_record_page_size)
-    logger.info(
-        f"There are {course_record_count} course records and {max_page_count} pages (with a page size of {course_record_page_size})")
+def get_missing_user_ids_to_fetch():
+    logger.info("Counting user course records")
+    course_record_counts = get_user_course_record_counts()
+    learner_record_counts = get_user_learner_record_counts()
+    missing_learner_ids = []
+    logger.info("Finding missing records via learner_id")
+    for learner_id, course_record_count in course_record_counts.items():
+        learner_record_count = learner_record_counts.get(learner_id)
+        if not learner_record_count or learner_record_count > course_record_count:
+            missing_learner_ids.append(learner_id)
 
-    logger.info("Counting learner records")
-    learner_record_count = count_learner_records()
-    learner_record_pages = learner_record_count // course_record_page_size
-    logger.info(
-        f"There are {learner_record_count} learner records. {learner_record_pages} full pages have been processed")
-    return CourseRecordPagination(course_record_page_size, course_record_count, max_page_count, learner_record_count,
-                                  learner_record_pages)
+    logger.info(f"{len(missing_learner_ids)} missing learner ids")
+    return missing_learner_ids
 
 
-def insert_course_records(pagination: CourseRecordPagination, execute=False):
-    if pagination.has_remaining_records():
-        logger.info(
-            f"There are {pagination.get_remaining_records()} records left to process, which is {pagination.get_remaining_pages()} pages")
-        for page in range(pagination.total_processed_pages, pagination.total_course_record_pages):
-            page = page + 1
-            logger.info(f"Fetching course records for page {page}")
-            result = get_course_records(page)
-            logger.info(f"Transforming {len(result)} course records")
-            pagination.processed_count += len(result)
-            learner_records = transform_course_records_into_learner_records(result)
-            logger.info(f"{len(learner_records)} learner records ready to be inserted")
-            if execute:
-                logger.info(f"Inserting {len(learner_records)} learner records")
-                insert_learner_records(learner_records)
-            else:
-                logger.info("execute flag not passed. Not inserting")
-    else:
-        logger.info("No records left to process")
+def insert_course_records_for_missing_users(missing_learner_ids: List[str], execute=False):
+    for _i in range(0, len(missing_learner_ids), 2000):
+        batch = missing_learner_ids[_i:_i + 2000]
+        result = get_course_records(batch)
+        learner_records = transform_course_records_into_learner_records(result)
+        if execute:
+            logger.info(f"Inserting {len(learner_records)} learner records")
+            insert_learner_records(learner_records)
+        else:
+            logger.info("execute flag not passed. Not inserting")
 
 
 def fetch_all_lr_map():
@@ -63,9 +51,11 @@ def fetch_all_lr_map():
     return {lr.get_id(): lr for lr in learner_records}
 
 
-def transform_course_record_into_event_id(course_record: CourseRecord):
+def transform_course_record_into_event_id(lr: LearnerRecord, course_record: CourseRecord):
+    pprint(course_record.__dict__)
     if course_record.state == 'ARCHIVED':
-        return REMOVE_FROM_LEARNING_PLAN
+        if lr.created_timestamp != course_record.created_at:
+            return REMOVE_FROM_LEARNING_PLAN
     elif course_record.state is None:
         if course_record.preference == 'LIKED':
             return MOVE_TO_LEARNING_PLAN
@@ -103,18 +93,21 @@ def apply_non_completion_events(learner_records: Dict[str, LearnerRecordWithEven
 
 def find_non_completion_events(learner_records: Dict[str, LearnerRecordWithEvents],
                                incomplete_records: List[CourseRecord]):
-    logger.info("Processing other events")
+    logger.info(f"Processing other events for {len(incomplete_records)} incomplete course records")
     for incomplete_record in incomplete_records:
-        event_id = transform_course_record_into_event_id(incomplete_record)
-        if event_id:
-            course_record_id = incomplete_record.get_id()
-            lr = learner_records.get(course_record_id)
-            if lr:
+        course_record_id = incomplete_record.get_id()
+        lr = learner_records.get(course_record_id)
+        if lr:
+            event_id = transform_course_record_into_event_id(lr, incomplete_record)
+            if event_id:
+                print(f"Event found for course record {course_record_id}: {event_id}")
                 lre = LearnerRecordEvent(lr.lr_id, event_id, incomplete_record.last_updated)
                 lr.events.append(lre)
                 learner_records[course_record_id] = lr
             else:
-                logger.warning(f"Learner record with id {course_record_id} doesn't exist")
+                print(f"No event for course record: {course_record_id}")
+        else:
+            logger.warning(f"Learner record with id {course_record_id} doesn't exist")
     return learner_records
 
 
@@ -131,8 +124,8 @@ def extract_events(_map: Dict[str, LearnerRecordWithEvents]):
 def run(data: List[str], execute: bool):
     if "learner_records" in data:
         logger.info("learner_records flag found")
-        course_record_pagination = get_course_record_pagination()
-        insert_course_records(course_record_pagination, execute)
+        missing_learner_ids = get_missing_user_ids_to_fetch()
+        insert_course_records_for_missing_users(missing_learner_ids)
 
     if "events" in data:
         logger.info("events flag found")

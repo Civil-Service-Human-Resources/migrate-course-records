@@ -11,8 +11,10 @@ dotenv.load_dotenv()
 event_source_id = os.environ['EVENT_SOURCE_ID']
 course_record_page_size = os.getenv('COURSE_RECORD_PAGE_SIZE', 200000)
 
-
 # DB
+
+batch_size = 1000
+
 
 def get_mysql_connection():
     return mysql.connector.connect(

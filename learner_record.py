@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional, Set
 
-from config import get_mysql_connection, event_source_id, course_record_page_size
+from config import get_mysql_connection, event_source_id, batch_size
 from log import get_logger
 from models import CourseRecordBase
 
@@ -58,11 +58,10 @@ class CombinedRecord(CourseRecordBase):
 
 
 def insert_learner_records(learner_records: List[LearnerRecord]):
-    batch_size = 1000
     logger.info(f"Inserting {len(learner_records)} total records in batches of {batch_size}")
     connection = get_mysql_connection()
-    for _i in range(0, len(learner_records), 1000):
-        batch = learner_records[_i:_i + 1000]
+    for _i in range(0, len(learner_records), batch_size):
+        batch = learner_records[_i:_i + batch_size]
         logger.info(f"Inserting {len(batch)} records")
         values = []
         for row in batch:
@@ -133,14 +132,18 @@ def get_all_learner_records():
         return [LearnerRecordWithEvents(row[0], row[1], row[2], row[3]) for row in cursor.fetchall()]
 
 
-def count_learner_records():
+def get_user_learner_record_counts():
     conn = get_mysql_connection()
     with conn.cursor() as cursor:
         sql = f"""
-            select count(*) from learner_records
+            select lr.learner_id, count(*)
+            from learner_records lr
+            where lr.learner_record_type = 1
+            group by lr.learner_id
+            order by lr.learner_id asc
         """
         cursor.execute(sql)
-        return int(cursor.fetchone()[0])
+        return {str(row[0]): int(row[1]) for row in cursor.fetchall()}
 
 
 # Events
@@ -151,14 +154,17 @@ REMOVE_FROM_SUGGESTIONS = 3
 COMPLETE_COURSE = 4
 
 
-def count_course_records():
+def get_user_course_record_counts():
     conn = get_mysql_connection()
     with conn.cursor() as cursor:
         sql = f"""
-            select count(*) from course_record
+            select cr.user_id, count(*)
+            from course_record cr 
+            group by cr.user_id
+            order by cr.user_id asc
         """
         cursor.execute(sql)
-        return int(cursor.fetchone()[0])
+        return {str(row[0]): int(row[1]) for row in cursor.fetchall()}
 
 
 def count_non_completed_course_records():
@@ -171,9 +177,10 @@ def count_non_completed_course_records():
         return int(cursor.fetchone()[0])
 
 
-def get_course_records(page):
-    offset = (page - 1) * course_record_page_size
+def get_course_records(learner_ids: List[str]):
+    logger.info(f"Fetching course records for {len(learner_ids)} learners")
     conn = get_mysql_connection()
+    user_ids_in = ",".join([f"'{_id}'" for _id in learner_ids])
     with conn.cursor() as cursor:
         sql = f"""
             SELECT cr.course_id, cr.user_id,
@@ -183,9 +190,8 @@ def get_course_records(page):
             end as 'created_at'
             from learner_record.course_record cr
             LEFT OUTER JOIN learner_record.module_record mr ON mr.course_id = cr.course_id AND mr.user_id = cr.user_id
-            GROUP BY cr.course_id, cr.user_id
-            ORDER BY cr.course_id, cr.user_id
-            LIMIT {course_record_page_size} OFFSET {offset};
+            WHERE cr.user_id in ({user_ids_in})
+            GROUP BY cr.course_id, cr.user_id;
         """
         cursor.execute(sql)
         return [BasicCourseRecord(row[0], row[1], row[2]) for row in cursor.fetchall()]
@@ -197,26 +203,25 @@ def get_incomplete_course_records_with_records(records_to_query: List[CourseReco
     for _i in range(0, len(records_to_query), 1000):
         batch = records_to_query[_i:_i + 1000]
         logger.info(f"Finding course records {len(batch)} learner records")
-        course_ids = set()
-        user_ids = set()
+        user_id_course_ids = set()
         for record in batch:
-            course_ids.add(record.course_id)
-            user_ids.add(record.user_id)
-        total_records.extend(get_incomplete_course_records_with_ids(course_ids, user_ids))
+            user_id_course_ids.add((record.course_id, record.user_id))
+        total_records.extend(get_incomplete_course_records_with_ids(user_id_course_ids))
     return total_records
 
 
-def get_incomplete_course_records_with_ids(user_ids: Set[str], course_ids: Set[str]):
+def get_incomplete_course_records_with_ids(user_id_course_ids: Set[tuple[str]]):
     logger.info("Fetching incomplete course records")
-    course_ids_in = ",".join([f"'{_id}'" for _id in course_ids])
-    user_ids_in = ",".join([f"'{_id}'" for _id in user_ids])
+    where = " OR ".join(
+        f"(cr.course_id = '{c_id}' and cr.user_id = '{u_id}' and cr.state != 'COMPLETED' || cr.state is null)" for
+        c_id, u_id in
+        user_id_course_ids)
     conn = get_mysql_connection()
     with conn.cursor() as cursor:
         sql = f"""
             SELECT cr.course_id, cr.user_id, cr.state, cr.preference, cr.last_updated
             from course_record cr
-            where cr.course_id in ({course_ids_in}) and cr.user_id in ({user_ids_in}) and cr.state != 'COMPLETED';
+            where {where};
         """
-        logger.info(sql)
         cursor.execute(sql)
         return [CourseRecord(row[0], row[1], row[2], row[3], row[4]) for row in cursor.fetchall()]
