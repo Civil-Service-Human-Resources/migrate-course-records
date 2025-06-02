@@ -1,5 +1,4 @@
 import argparse
-from pprint import pprint
 from typing import List, Dict
 
 from course_completions import get_course_completions, CourseCompletion
@@ -52,7 +51,6 @@ def fetch_all_lr_map():
 
 
 def transform_course_record_into_event_id(lr: LearnerRecord, course_record: CourseRecord):
-    pprint(course_record.__dict__)
     if course_record.state == 'ARCHIVED':
         if lr.created_timestamp != course_record.created_at:
             return REMOVE_FROM_LEARNING_PLAN
@@ -71,7 +69,8 @@ def apply_course_completion_events(learner_records: Dict[str, LearnerRecordWithE
 
 def find_course_completion_events(learner_records: Dict[str, LearnerRecordWithEvents],
                                   course_completions: List[CourseCompletion]):
-    logger.info("Processing course completion events")
+    logger.info(f"Processing {len(course_completions)} course completion events")
+    completions_processed = 0
     for completion in course_completions:
         course_record_id = completion.get_id()
         lr = learner_records.get(course_record_id)
@@ -80,8 +79,10 @@ def find_course_completion_events(learner_records: Dict[str, LearnerRecordWithEv
             lr.events.append(lre)
             lr.has_completions = True
             learner_records[course_record_id] = lr
+            completions_processed += 1
         else:
             logger.warning(f"Learner record with id {course_record_id} doesn't exist")
+    logger.info(f"Processed {completions_processed} out of {len(course_completions)} course completion events")
     return learner_records
 
 
@@ -94,20 +95,20 @@ def apply_non_completion_events(learner_records: Dict[str, LearnerRecordWithEven
 def find_non_completion_events(learner_records: Dict[str, LearnerRecordWithEvents],
                                incomplete_records: List[CourseRecord]):
     logger.info(f"Processing other events for {len(incomplete_records)} incomplete course records")
+    events_processed = 0
     for incomplete_record in incomplete_records:
         course_record_id = incomplete_record.get_id()
         lr = learner_records.get(course_record_id)
         if lr:
             event_id = transform_course_record_into_event_id(lr, incomplete_record)
             if event_id:
-                print(f"Event found for course record {course_record_id}: {event_id}")
                 lre = LearnerRecordEvent(lr.lr_id, event_id, incomplete_record.last_updated)
                 lr.events.append(lre)
                 learner_records[course_record_id] = lr
-            else:
-                print(f"No event for course record: {course_record_id}")
+                events_processed += 1
         else:
             logger.warning(f"Learner record with id {course_record_id} doesn't exist")
+    logger.info(f"Processed {events_processed} out of {len(incomplete_records)} incomplete course records")
     return learner_records
 
 
@@ -125,7 +126,7 @@ def run(data: List[str], execute: bool):
     if "learner_records" in data:
         logger.info("learner_records flag found")
         missing_learner_ids = get_missing_user_ids_to_fetch()
-        insert_course_records_for_missing_users(missing_learner_ids)
+        insert_course_records_for_missing_users(missing_learner_ids, execute)
 
     if "events" in data:
         logger.info("events flag found")
